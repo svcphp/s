@@ -1,6 +1,6 @@
 <?php
 
-// v0.0.1
+// v0.0.2
 class s
 {
 	static private $apis = [];
@@ -9,6 +9,8 @@ class s
 	static private $request = [];
 	static private $serveStartTime = 0;
 	static private $pdos = null;
+	static private $redises = null;
+	static private $cryptstr = '?GQ$0K0GgLdO=f+~L68PLm$uhKr4\'=tVVFs7@sK61cj^f?HZ';
 
 	static function call($name, $data)
 	{
@@ -184,7 +186,7 @@ class s
 			}
 			$data['extra'] = $extra;
 		}
-		file_put_contents($_CONFIG['LOG_FILE'], sprintf("%s%06s\t%s\n", date("Y/m/d H:i:s."), $mtime * 1000000 % 10000, json_encode($data)));
+		file_put_contents($_CONFIG['LOG_FILE'], sprintf("%s%06s %s\n", date("Y/m/d H:i:s."), $mtime * 1000000 % 10000, json_encode($data)));
 	}
 
 	static function logRequest(&$responseData, $responseDataLength)
@@ -408,8 +410,37 @@ class s
 			PDO::ATTR_STRINGIFY_FETCHES => false,
 			PDO::ATTR_PERSISTENT => false,
 		];
-		$pdo = new PDO($_CONFIG[$prefix . 'DSN'], $_CONFIG[$prefix . 'USER'], $_CONFIG[$prefix . 'PASSWORD'], $_CONFIG[$prefix . 'OPTIONS']);
+		$pdo = new PDO($_CONFIG[$prefix . 'DSN'], $_CONFIG[$prefix . 'USER'], self::decryptPassword($_CONFIG[$prefix . 'PASSWORD']), $_CONFIG[$prefix . 'OPTIONS']);
 		self::$pdos[$name . '_'] = $pdo;
 		return $pdo;
+	}
+
+	static function getRedis($name = '')
+	{
+		if (self::$redises[$name . '_']) return self::$redises[$name . '_'];
+		global $_CONFIG;
+		$prefix = 'REDIS_';
+		if ($name !== '') $prefix = 'REDIS_' . strtoupper($name) . '_';
+		list($host, $port, $n) = explode(':', $_CONFIG[$prefix . 'HOST']);
+		if (!$host) $host = '127.0.0.1';
+		if (!$port) $port = 6379;
+		if (!$n || $n < 0 || $n > 15) $n = 0;
+		$redis = new Redis();
+		$redis->connect($host, $port);
+		if ($_CONFIG[$prefix . 'PASSWORD']) {
+			$redis->auth(self::decryptPassword($_CONFIG[$prefix . 'PASSWORD']));
+		}
+		if ($n) {
+			$redis->select($n);
+		}
+		return $redis;
+	}
+
+	static function decryptPassword($str)
+	{
+		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr(self::$cryptstr, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr(self::$cryptstr, 32));
+		$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
+		if (!$pwd) $pwd = $str;
+		return $pwd;
 	}
 }
