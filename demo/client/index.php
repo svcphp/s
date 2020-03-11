@@ -7,5 +7,7 @@ s::init();
 
 include 'client.php';
 
-s::register('test', 'test');
+s::register('aa.bb.cc.test');
+s::register('cc.test');
+s::register('test');
 s::serve();

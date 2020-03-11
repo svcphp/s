@@ -1,6 +1,6 @@
 <?php
 
-// v0.0.2
+// v0.0.3
 class s
 {
 	static private $apis = [];
@@ -46,9 +46,9 @@ class s
 			$result = json_decode($output, JSON_UNESCAPED_UNICODE);
 			$err = curl_error($ch);
 			if ($result === null || $err) {
-				s::error('call ' . $name, ['callName' => $name, 'data' => $data, 'error' => $err]);
+				self::error('call ' . $name, ['callName' => $name, 'data' => $data, 'error' => $err]);
 			} else {
-				s::info('call ' . $name, ['callName' => $name, 'data' => $data, 'resultLength' => strlen($output)]);
+				self::info('call ' . $name, ['callName' => $name, 'data' => $data, 'resultLength' => strlen($output)]);
 			}
 			return $result;
 		}
@@ -120,32 +120,73 @@ class s
 		// 查找接口
 		$apiName = str_replace('/', '.', substr($_SERVER['PATH_INFO'], 1));
 		self::$request = self::$apis[$apiName];
-		$done = false;
+
 		if (!self::$request) {
-			http_response_code(404);
-			$done = true;
+			return self::output(404, self::failed(-404, 'api not registered'));
+		}
+
+		$names = explode('.', $apiName);
+		$name_num = count($names);
+		$method = $names[$name_num - 1];
+		$class = '';
+		if ($name_num > 1) {
+			$class = $names[$name_num - 2];
+		}
+		$path = '';
+		if ($name_num > 2) {
+			$path = join('/', array_slice($names, 0, $name_num - 2));
+		}
+
+		if ($class && !class_exists($class)) {
+			if ($path) {
+				include "$path/$class.php";
+			} else {
+				include "$class.php";
+			}
+		}
+
+		if ($class) {
+			if (!class_exists($class)) {
+				self::error("api class not found", ['api' => $apiName, 'file' => "$path/$class.php", 'class' => $class, 'method' => $method]);
+				return self::output(404, self::failed(-404, 'api class not found'));
+			}
+			if (!method_exists($class, $method)) {
+				self::error("api method not found", ['api' => $apiName, 'file' => "$path/$class.php", 'class' => $class, 'method' => $method]);
+				return self::output(404, self::failed(-404, 'api method not found'));
+			}
+			$call_name = [$class, $method];
+		} else {
+			if (!function_exists($method)) {
+				self::error("api function not found", ['api' => $apiName]);
+				return self::output(404, self::failed(-404, 'api function not found'));
+			}
+			$call_name = $method;
 		}
 
 		// 验证权限
-		if (!$done) {
-			if (self::$request['authLevel'] > 0) {
-				if (!call_user_func(self::$authChecker, self::$request['authLevel'], $apiName, $requestData)) {
-					http_response_code(403);
-					$done = true;
-				}
+		if (self::$request['authLevel'] > 0) {
+			if (!call_user_func(self::$authChecker, self::$request['authLevel'], $apiName, $requestData)) {
+				return self::output(403, self::failed(-403, 'auth failed'));
 			}
 		}
 
 		// 调用
-		if (!$done) {
-			$responseData = call_user_func(self::$request['func'], $requestData);
+		$responseData = call_user_func($call_name, $requestData);
+		return self::output(200, $responseData);
+	}
+
+	static function output($responseCode, $responseData)
+	{
+		if ($responseCode !== 200) {
+			http_response_code($responseCode);
 		}
 
 		$outData = json_encode($responseData);
 		if ($outData === '[]') $outData = '{}';
-		self::logRequest($responseData, strlen($outData));
 
+		self::logRequest($responseData, strlen($outData));
 		echo $outData;
+		return null;
 	}
 
 	static function setAuthChecker($authChecker)
@@ -153,14 +194,9 @@ class s
 		self::$authChecker = $authChecker;
 	}
 
-	static function register($name, $func, $authLevel = 0, $priority = 5)
+	static function register($name, $authLevel = 0, $priority = 5)
 	{
-		if (!function_exists($func)) {
-			self::error("can't register api $name");
-			return;
-		}
 		self::$apis[$name] = [
-			'func' => $func,
 			'authLevel' => $authLevel,
 			'priority' => $priority,
 		];

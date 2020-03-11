@@ -7,7 +7,7 @@ s::init();
 
 include 'name.php';
 
-s::register('getName', 'getName', 1);
-s::register('setName', 'setName', 2);
+s::register('getName', 1);
+s::register('setName', 2);
 
 s::serve();
