@@ -1,6 +1,6 @@
 <?php
 
-// v0.0.3
+// v0.0.4
 class s
 {
 	static private $apis = [];
@@ -10,7 +10,7 @@ class s
 	static private $serveStartTime = 0;
 	static private $pdos = null;
 	static private $redises = null;
-	static private $cryptstr = '?GQ$0K0GgLdO=f+~L68PLm$uhKr4\'=tVVFs7@sK61cj^f?HZ';
+	static private $encrypt = '';
 
 	static function call($name, $data)
 	{
@@ -20,7 +20,7 @@ class s
 
 		$groupUrl = $_CONFIG['SERVICE_GROUP_' . strtoupper(explode('.', $name)[0])];
 		list($token, $timeout) = explode(':', $_CONFIG['SERVICE_CALL_' . strtoupper($names[1])]);
-		if (!$timeout) $timeout = $_CONFIG['SERVICE_CALLTIMEOUT'];
+		if (!$timeout) $timeout = $_CONFIG['SERVICE_CALL_TIMEOUT'];
 		if ($groupUrl) {
 			$json_data = json_encode($data);
 			$ch = curl_init($groupUrl . $names[1] . '/index.php/' . str_replace('.', '/', $names[2]));
@@ -75,16 +75,8 @@ class s
 			}
 		}
 
-		if (!$_CONFIG['SERVICE_CALLTIMEOUT']) {
-			$_CONFIG['SERVICE_CALLTIMEOUT'] = 60;
-		}
-
-		if (!$_CONFIG['SERVICE_SESSIONKEY']) {
-			$_CONFIG['SERVICE_SESSIONKEY'] = 'sessionId';
-		}
-
-		if (!$_CONFIG['SERVICE_CLIENTKEY']) {
-			$_CONFIG['SERVICE_CLIENTKEY'] = 'clientId';
+		if (!$_CONFIG['SERVICE_CALL_TIMEOUT']) {
+			$_CONFIG['SERVICE_CALL_TIMEOUT'] = 60;
 		}
 
 		if (!$_CONFIG['LOG_FILE']) {
@@ -94,12 +86,58 @@ class s
 		if (!isset($_CONFIG['LOG_SENSITIVE'])) $_CONFIG['LOG_SENSITIVE'] = 'phone,password,secure,token,accessToken';
 		$_CONFIG['LOG_SENSITIVE'] = explode(',', strtoupper($_CONFIG['LOG_SENSITIVE']));
 
+		self::$encrypt = '?GQ$0K0GgLdO=f+~L68PLm$uhKr4\'=tVVFs7@sK61cj^f?HZ';
+		if ($_CONFIG['SERVICE_ENCRYPT']) {
+			$encrypt = base64_decode(self::decryptPassword($_CONFIG['SERVICE_ENCRYPT']));
+			self::$encrypt = substr($encrypt, 2, 32) . substr($encrypt, 45, 16);
+			$_CONFIG['SERVICE_ENCRYPT'] = '';
+		}
+
+		header('X-Powered-By: s');
+		header('Server: s');
+
+		// 支持使用Redis作为SESSION存储
+		if ($_CONFIG['REDIS_SESSION_HOST']) {
+			list($redis_host, $redis_port, $redis_database) = explode(':', $_CONFIG["REDIS_SESSION_HOST"]);
+			if (!$redis_port) $redis_port = 6379;
+			if (!$redis_database) $redis_database = 0;
+			$redis_password = $_CONFIG["REDIS_SESSION_PASSWORD"];
+			if ($redis_password) $redis_password = self::decryptPassword($redis_password);
+			ini_set('session.save_handler', 'redis');
+			ini_set('session.save_path', "tcp://$redis_host:$redis_port?auth=$redis_password&database=$redis_database");
+			if ($_CONFIG['SERVICE_SESSION_KEY']) {
+				$session_id = self::getHeader($_CONFIG['SERVICE_SESSION_KEY']);
+				if (!$session_id) {
+					$session_id = base_convert(rand(10000000, 99999999), 10, 35) . '-' . base_convert($_SERVER['REQUEST_TIME'] * 1000 % 31536000000, 10, 36) . '-' . base_convert(rand(1000000000, 9999999999), 10, 36);
+					header("{$_CONFIG['SERVICE_SESSION_KEY']}: $session_id");
+				}
+				ini_set('session.use_cookies', 0);
+				if ($_CONFIG['REDIS_SESSION_TTL']) {
+					ini_set('session.gc_maxlifetime', $_CONFIG['REDIS_SESSION_TTL']);
+				}
+				session_id($session_id);
+			}
+			session_start();
+		}
+
+		if ($_CONFIG['SERVICE_CLIENT_KEY']) {
+			$_SERVER['HTTP_X_CLIENT_ID'] = self::getHeader($_CONFIG['SERVICE_CLIENT_KEY']);
+			if (!$_SERVER['HTTP_X_CLIENT_ID']) {
+				$_SERVER['HTTP_X_CLIENT_ID'] = base_convert(rand(10000000, 99999999), 10, 35) . '-' . base_convert($_SERVER['REQUEST_TIME'] * 1000 % 31536000000, 10, 36) . '-' . base_convert(rand(1000000000, 9999999999), 10, 36);
+				setcookie($_CONFIG['SERVICE_CLIENT_KEY'], $_SERVER['HTTP_X_CLIENT_ID'], 0, '/');
+			}
+		}
+
 		if (!$_SERVER['HTTP_X_REAL_IP']) $_SERVER['HTTP_X_REAL_IP'] = $_SERVER['REMOTE_ADDR'];
 		if (!$_SERVER['HTTP_X_REQUEST_ID']) $_SERVER['HTTP_X_REQUEST_ID'] = base_convert($_SERVER['REQUEST_TIME'] * 1000 % 31536000000, 10, 36) . '-' . base_convert(rand(1000000000, 9999999999), 10, 36);
 		if (!$_SERVER['HTTP_X_HOST']) $_SERVER['HTTP_X_HOST'] = $_SERVER['HTTP_HOST'];
 		if (!$_SERVER['HTTP_X_SCHEME']) $_SERVER['HTTP_X_SCHEME'] = $_SERVER['REQUEST_SCHEME'];
-		if (!$_SERVER['HTTP_X_SESSION_ID']) $_SERVER['HTTP_X_SESSION_ID'] = $_SERVER['HTTP_' . strtoupper($_CONFIG['SERVICE_SESSIONKEY'])];
-		if (!$_SERVER['HTTP_X_CLIENT_ID']) $_SERVER['HTTP_X_CLIENT_ID'] = $_SERVER['HTTP_' . strtoupper($_CONFIG['SERVICE_CLIENTKEY'])];
+		if (!$_SERVER['HTTP_X_SESSION_ID']) $_SERVER['HTTP_X_SESSION_ID'] = self::getHeader($_CONFIG['SERVICE_SESSION_KEY']);
+	}
+
+	static function getHeader($key)
+	{
+		return $_SERVER['HTTP_' . str_replace('-', '_', strtoupper($key))];
 	}
 
 	static function serve()
@@ -474,7 +512,7 @@ class s
 
 	static function decryptPassword($str)
 	{
-		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr(self::$cryptstr, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr(self::$cryptstr, 32));
+		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr(self::$encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr(self::$encrypt, 32));
 		$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
 		if (!$pwd) $pwd = $str;
 		return $pwd;
