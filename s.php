@@ -11,19 +11,37 @@ class s
 	static private $pdos = null;
 	static private $redises = null;
 	static private $encrypt = '';
+	static private $curlPool = null;
 
 	static function call($name, $data)
 	{
-		global $_CONFIG;
-		$names = explode('.', $name, 3);
-		if (count($names) !== 3) return null;
+		return self::multiCall([[$name, $data]])[0];
+	}
 
-		$groupUrl = $_CONFIG['SERVICE_GROUP_' . strtoupper(explode('.', $name)[0])];
-		list($token, $timeout) = explode(':', $_CONFIG['SERVICE_CALL_' . strtoupper($names[1])]);
-		if (!$timeout) $timeout = $_CONFIG['SERVICE_CALL_TIMEOUT'];
-		if ($groupUrl) {
+	static function multiCall($requests)
+	{
+		global $_CONFIG;
+		if (self::$curlPool === null) {
+			self::$curlPool = curl_multi_init();
+		}
+
+		foreach ($requests as $k => $v) {
+			list($name, $data) = $v;
+			$names = explode('.', $name, 3);
+			if (count($names) !== 3) return null;
+
+			$groupUrl = $_CONFIG['SERVICE_GROUP_' . strtoupper(explode('.', $name)[0])];
+			list($token, $timeout) = explode(':', $_CONFIG['SERVICE_CALL_' . strtoupper($names[1])]);
+			if (!$timeout) $timeout = $_CONFIG['SERVICE_CALL_TIMEOUT'];
+			if (!$groupUrl) {
+				$groupUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . preg_split('#\\w+/index.php#', $_SERVER['REQUEST_URI'])[0];
+			}
+			$url = $groupUrl . $names[1] . '/index.php/' . str_replace('.', '/', $names[2]);
+			$requests[$k][] = $url;
+
 			$json_data = json_encode($data);
-			$ch = curl_init($groupUrl . $names[1] . '/index.php/' . str_replace('.', '/', $names[2]));
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_URL, $url);
 			curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
 			curl_setopt($ch, CURLOPT_POSTFIELDS, $json_data);
 			curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
@@ -40,18 +58,33 @@ class s
 				'X-From-Node: ' . $_SERVER['SERVER_ADDR'] . ':' . $_SERVER['SERVER_PORT'],
 				'Access-Token: ' . $token,
 			]);
-			$output = curl_exec($ch);
-			curl_close($ch);
 
+			$requests[$k][] = $ch;
+			curl_multi_add_handle(self::$curlPool, $ch);
+		}
+
+		$running = null;
+		$results = [];
+		do {
+			curl_multi_exec(self::$curlPool, $running);
+			curl_multi_select(self::$curlPool);
+		} while ($running > 0);
+
+		foreach ($requests as $k => $v) {
+			list($name, $data, $url, $ch) = $v;
+			$output = curl_multi_getcontent($ch);
 			$result = json_decode($output, JSON_UNESCAPED_UNICODE);
 			$err = curl_error($ch);
 			if ($result === null || $err) {
-				self::error('call ' . $name, ['callName' => $name, 'data' => $data, 'error' => $err]);
+				self::error('call ' . $name, ['callName' => $name, 'url' => $url, 'data' => $data, 'error' => $err]);
 			} else {
-				self::info('call ' . $name, ['callName' => $name, 'data' => $data, 'resultLength' => strlen($output)]);
+				self::info('call ' . $name, ['callName' => $name, 'url' => $url, 'data' => $data, 'resultLength' => strlen($output)]);
 			}
-			return $result;
+			$results[] = $result;
 		}
+		curl_multi_remove_handle(self::$curlPool, $ch);
+
+		return $results;
 	}
 
 	static function init()

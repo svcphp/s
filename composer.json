@@ -1,0 +1,14 @@
+{
+    "name": "svcphp/s",
+    "type": "library",
+    "license": "MIT",
+    "description": "",
+    "version": "0.0.4",
+    "authors": [
+        {
+            "name": "Star",
+            "email": "star3s@126.com"
+        }
+    ],
+    "require": {}
+}
