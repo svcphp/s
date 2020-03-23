@@ -1,6 +1,5 @@
 <?php
 
-// v0.0.4
 class s
 {
 	static private $apis = [];
