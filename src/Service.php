@@ -28,25 +28,28 @@ class Service
 			list($name, $data) = $v;
 			$names = explode('.', $name, 3);
 			if (count($names) !== 3) return null;
+			list($group_name, $service_name, $path_name) = $names;
 
-			$groupUrl = $this->config['SERVICE_GROUP_' . strtoupper($names[0])];
+			$groupUrl = $this->config['SERVICE_GROUP_' . strtoupper($group_name)];
 			if (!$groupUrl) {
-				$groupUrl = $this->config['SERVICE_TOP_GROUP'] . $names[0] . '/';
+				$groupUrl = $this->config['SERVICE_TOP_GROUP'] . $group_name . '/';
 			}
-			list($token, $timeout) = explode(':', $this->config['SERVICE_CALL_' . strtoupper($names[1])]);
+			list($token, $timeout) = explode(':', $this->config['SERVICE_CALL_' . strtoupper($service_name)]);
 
 //			$groupUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . preg_split('#\\w+/index.php#', $_SERVER['REQUEST_URI'])[0];
 			if (strtolower(substr($groupUrl, 0, 4)) != 'http') {
 				$requests[$k][] = 'fast';
-				$path = $groupUrl . $names[1];
-				$requests[$k][] = $path;
+				$local_path = $groupUrl . $service_name;
+				$requests[$k][] = $local_path;
+				$requests[$k][] = '/' . str_replace('.', '/', $path_name);
+				$requests[$k][] = $token;
 				$fast_num++;
 			} else {
 				if (!$timeout) $timeout = $this->config['SERVICE_CALL_TIMEOUT'];
 
 				$requests[$k][] = 'curl';
 				$curl_num++;
-				$url = $groupUrl . $names[1] . '/index.php/' . str_replace('.', '/', $names[2]);
+				$url = $groupUrl . $service_name . '/index.php/' . str_replace('.', '/', $path_name);
 				$requests[$k][] = $url;
 
 				$json_data = json_encode($data);
@@ -69,29 +72,31 @@ class Service
 					'Access-Token: ' . $token,
 				]);
 				$requests[$k][] = $ch;
+				$requests[$k][] = $token;
 			}
 			$results[] = null;
 		}
 
 		if ($fast_num > 0) {
 			foreach ($requests as $k => $v) {
-				list($name, $data, $type, $path) = $v;
-				if ($type === 'fast' && file_exists($path)) {
+				list(, $data, $type, $local_path, $path_info, $token) = $v;
+				if ($type === 'fast' && file_exists($local_path) && file_exists($local_path . '/index.php')) {
 					$old_path = getcwd();
-					chdir($path);
+					chdir($local_path);
 
 					global $_CONFIG;
 					$_CONFIG = [];
 					$old_server = $_SERVER;
 					$_SERVER['REQUEST_METHOD'] = 'POST';
 					$_POST = $data;
-					$_SERVER['PATH_INFO'] = '/'.str_replace('.', '/', $names[2]);
+					$_SERVER['PATH_INFO'] = $path_info;
 					$_SERVER['HTTP_X_FROM_APP'] = $this->config['SERVICE_APP'];
 					$_SERVER['HTTP_X_FROM_NODE'] = $_SERVER['SERVER_ADDR'] . ':' . $_SERVER['SERVER_PORT'];
 					$_SERVER['HTTP_ACCESS_TOKEN'] = $token;
 
 					s::_store();
 					ob_start();
+					/** @noinspection PhpIncludeInspection */
 					include 'index.php';
 					$output = ob_get_contents();
 					ob_end_clean();
@@ -100,7 +105,7 @@ class Service
 
 					$_SERVER = $old_server;
 					chdir($old_path);
-					$results[$k] = json_decode($output, JSON_UNESCAPED_UNICODE);;
+					$results[$k] = json_decode($output, JSON_UNESCAPED_UNICODE);
 				}
 			}
 		}
@@ -111,7 +116,7 @@ class Service
 			}
 
 			foreach ($requests as $k => $v) {
-				list($name, $data, $type, $url, $ch) = $v;
+				list(, , $type, , $ch) = $v;
 				if ($type === 'curl') {
 					curl_multi_add_handle($this->curlPool, $ch);
 				}
@@ -124,7 +129,7 @@ class Service
 			} while ($running > 0);
 
 			foreach ($requests as $k => $v) {
-				list($name, $data, $type, $url, $ch) = $v;
+				list($name, $data, , $url, $ch) = $v;
 				$output = curl_multi_getcontent($ch);
 				$result = json_decode($output, JSON_UNESCAPED_UNICODE);
 				$err = curl_error($ch);
@@ -134,8 +139,8 @@ class Service
 					$this->info('call ' . $name, ['callName' => $name, 'url' => $url, 'data' => $data, 'resultLength' => strlen($output)]);
 				}
 				$results[$k] = $result;
+				curl_multi_remove_handle($this->curlPool, $ch);
 			}
-			curl_multi_remove_handle($this->curlPool, $ch);
 		}
 
 		return $results;
@@ -254,8 +259,6 @@ class Service
 			}
 		}
 
-		$responseData = [];
-
 		// 查找接口
 		$apiName = str_replace('/', '.', substr($_SERVER['PATH_INFO'], 1));
 		$this->request = $this->apis[$apiName];
@@ -278,6 +281,7 @@ class Service
 
 		if ($class && !class_exists($class)) {
 			if ($path) {
+				/** @noinspection PhpIncludeInspection */
 				include "$path/$class.php";
 			} else {
 				include "$class.php";
@@ -349,17 +353,7 @@ class Service
 		$data['logTime'] = $mtime;
 		$data['traceId'] = $_TRACE_ID;
 		if ($extra) {
-			if (is_array($extra)) {
-				foreach ($extra as $k => $v) {
-					if (in_array(strtoupper($k), $this->config['LOG_SENSITIVE'])) $extra[$k] = $this->getSensitiveStr($v);
-					if (is_array($v) && !isset($v[0])) {
-						foreach ($v as $k2 => $v2) {
-							if (in_array(strtoupper($k2), $this->config['LOG_SENSITIVE'])) $extra[$k][$k2] = $this->getSensitiveStr($v2);
-						}
-					}
-				}
-			}
-			$data['extra'] = $extra;
+			$data['extra'] = $this->fixSensitive($extra);
 		}
 		file_put_contents($this->config['LOG_FILE'], sprintf("%s%06s %s\n", date("Y/m/d H:i:s."), $mtime * 1000000 % 10000, json_encode($data)));
 	}
@@ -369,10 +363,14 @@ class Service
 		$node = $_SERVER['SERVER_ADDR'] . ':' . $_SERVER['SERVER_PORT'];
 
 		$log_in_headers = [];
-		foreach (getallheaders() as $k => $v) {
-			if (in_array($k, $this->config['SERVICE_NOLOGHEADERS'])) continue;
-			if (in_array(strtoupper(str_replace('-', '', $k)), $this->config['LOG_SENSITIVE'])) $v = $this->getSensitiveStr($v);
-			$log_in_headers[$k] = $v;
+		foreach ($_SERVER as $k => $v) {
+			if (substr($k, 0, 5) == 'HTTP_') {
+				$k = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($k, 5)))));
+				if (in_array($k, ['X-Real-Ip', 'X-Request-Id', 'X-Host', 'X-Scheme', 'X-Session-Id', 'X-Client-Id', 'X-From-App', 'X-From-Node'])) continue;
+				if (in_array($k, $this->config['SERVICE_NOLOGHEADERS'])) continue;
+				if (in_array(strtoupper(str_replace('-', '', $k)), $this->config['LOG_SENSITIVE'])) $v = $this->getSensitiveStr($v);
+				$log_in_headers[$k] = $v;
+			}
 		}
 
 		$log_out_headers = [];
@@ -383,41 +381,8 @@ class Service
 			$log_out_headers[$k] = $v;
 		}
 
-		if (is_array($this->requestData)) {
-			$logRequestData = [];
-			foreach ($this->requestData as $k => $v) {
-				if (is_array($v) && isset($v[0])) {
-					$v = [$v[0]];
-				}
-				if (in_array(strtoupper($k), $this->config['LOG_SENSITIVE'])) $v = $this->getSensitiveStr($v);
-				if (is_array($v) && !isset($v[0])) {
-					foreach ($v as $k2 => $v2) {
-						if (in_array(strtoupper($k2), $this->config['LOG_SENSITIVE'])) $v[$k2] = $this->getSensitiveStr($v2);
-					}
-				}
-				$logRequestData[$k] = $v;
-			}
-		} else {
-			$logRequestData = $this->requestData;
-		}
-
-		if (is_array($responseData)) {
-			$logResponseData = [];
-			foreach ($responseData as $k => $v) {
-				if (is_array($v) && isset($v[0])) {
-					$v = [$v[0]];
-				}
-				if (in_array(strtoupper($k), $this->config['LOG_SENSITIVE'])) $v = $this->getSensitiveStr($v);
-				if (is_array($v) && !isset($v[0])) {
-					foreach ($v as $k2 => $v2) {
-						if (in_array(strtoupper($k2), $this->config['LOG_SENSITIVE'])) $v[$k2] = $this->getSensitiveStr($v2);
-					}
-				}
-				$logResponseData[$k] = $v;
-			}
-		} else {
-			$logResponseData = $responseData;
-		}
+		$logRequestData = $this->fixSensitive($this->requestData);
+		$logResponseData = $this->fixSensitive($responseData);
 
 		$now_time = microtime(true);
 		$this->log([
@@ -446,6 +411,24 @@ class Service
 			'responseDataLength' => $responseDataLength,
 			'responseData' => $logResponseData,
 		]);
+	}
+
+	function fixSensitive($data, $level = 0)
+	{
+		if ($level > 10) return $data;
+		if (!is_array($data)) return $data;
+		if (isset($data[0])) {
+			$data = [$this->fixSensitive($data[0]), $level + 1];
+		} else {
+			foreach ($data as $k => $v) {
+				if (is_array($v)) {
+					$data[$k] = $this->fixSensitive($v, $level + 1);
+				} else {
+					if (in_array(strtoupper($k), $this->config['LOG_SENSITIVE'])) $data[$k] = $this->getSensitiveStr($v);
+				}
+			}
+		}
+		return $data;
 	}
 
 	function getSensitiveStr($str)
