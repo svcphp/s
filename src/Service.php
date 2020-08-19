@@ -592,8 +592,11 @@ class Service
 
 	function decryptPassword($str)
 	{
-		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr($this->encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr($this->encrypt, 32));
-		$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
+		$pwd = '';
+		if (function_exists('mcrypt_decrypt')) {
+			$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr($this->encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr($this->encrypt, 32));
+			$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
+		}
 		if (!$pwd) $pwd = $str;
 		return $pwd;
 	}
