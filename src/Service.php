@@ -355,7 +355,7 @@ class Service
 		if ($extra) {
 			$data['extra'] = $this->fixSensitive($extra);
 		}
-		file_put_contents($this->config['LOG_FILE'], sprintf("%s%06s %s\n", date("Y/m/d H:i:s."), $mtime * 1000000 % 10000, json_encode($data)));
+		file_put_contents($this->config['LOG_FILE'], sprintf("%s%06s %s\n", date("Y/m/d H:i:s."), $mtime * 1000000 % 10000, json_encode($data)), FILE_APPEND);
 	}
 
 	function logRequest(&$responseData, $responseDataLength)
