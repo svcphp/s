@@ -26,20 +26,20 @@ class Service
 		$results = [];
 		foreach ($requests as $k => $v) {
 			list($name, $data) = $v;
-			$names = explode('.', $name, 3);
-			if (count($names) !== 3) return null;
-			list($group_name, $service_name, $path_name) = $names;
+			$names = explode('.', $name, 2);
+			if (count($names) !== 2) return null;
+			list($service_name, $path_name) = $names;
 
-			$groupUrl = $this->config['SERVICE_GROUP_' . strtoupper($group_name)];
-			if (!$groupUrl) {
-				$groupUrl = $this->config['SERVICE_TOP_GROUP'] . $group_name . '/';
+			$serviceRoot = $this->config['SERVICE_' . strtoupper($service_name)];
+			if (!$serviceRoot) {
+				$serviceRoot = '../';
 			}
 			list($token, $timeout) = explode(':', $this->config['SERVICE_CALL_' . strtoupper($service_name)]);
 
-//			$groupUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . preg_split('#\\w+/index.php#', $_SERVER['REQUEST_URI'])[0];
-			if (strtolower(substr($groupUrl, 0, 4)) != 'http') {
+//			$serviceRoot = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . preg_split('#\\w+/index.php#', $_SERVER['REQUEST_URI'])[0];
+			if (strtolower(substr($serviceRoot, 0, 4)) != 'http') {
 				$requests[$k][] = 'fast';
-				$local_path = $groupUrl . $service_name;
+				$local_path = $serviceRoot . $service_name;
 				$requests[$k][] = $local_path;
 				$requests[$k][] = '/' . str_replace('.', '/', $path_name);
 				$requests[$k][] = $token;
@@ -49,7 +49,7 @@ class Service
 
 				$requests[$k][] = 'curl';
 				$curl_num++;
-				$url = $groupUrl . $service_name . '/index.php/' . str_replace('.', '/', $path_name);
+				$url = $serviceRoot . $service_name . '/index.php/' . str_replace('.', '/', $path_name);
 				$requests[$k][] = $url;
 
 				$json_data = json_encode($data);
@@ -106,6 +106,10 @@ class Service
 					$_SERVER = $old_server;
 					chdir($old_path);
 					$results[$k] = json_decode($output, JSON_UNESCAPED_UNICODE);
+					if($output && !$results[$k]){
+                        $this->error('call ' . $name, ['callName' => $name, 'url' => $url, 'data' => $data, 'error' => json_last_error_msg()]);
+                        $results[$k] = $output;
+					}
 				}
 			}
 		}
@@ -178,10 +182,6 @@ class Service
 			$this->config['SERVICE_CALL_TIMEOUT'] = 60;
 		}
 
-		if (!$this->config['SERVICE_TOP_GROUP']) {
-			$this->config['SERVICE_TOP_GROUP'] = '../../';
-		}
-
 		if (!$this->config['LOG_FILE']) {
 			$this->config['LOG_FILE'] = 'php://stderr';
 		}
@@ -250,7 +250,6 @@ class Service
 	function serve()
 	{
 		if (!$_SERVER['HTTP_X_SESSION_ID']) $_SERVER['HTTP_X_SESSION_ID'] = session_id();
-
 		$this->requestData = $_POST;
 		if (!$this->requestData && $_SERVER['REQUEST_METHOD'] !== 'GET') {
 			$post_data = file_get_contents('php://input');
@@ -270,34 +269,36 @@ class Service
 		$names = explode('.', $apiName);
 		$name_num = count($names);
 		$method = $names[$name_num - 1];
-		$class = '';
+		$classFileName = '';
+		$className = '';
 		if ($name_num > 1) {
-			$class = $names[$name_num - 2];
+			$classFileName = $names[$name_num - 2];
+			$className = $this->config['SERVICE_APP'].'_'.$names[$name_num - 2];
 		}
 		$path = '';
 		if ($name_num > 2) {
 			$path = join('/', array_slice($names, 0, $name_num - 2));
 		}
 
-		if ($class && !class_exists($class)) {
+		if ($className && !class_exists($className)) {
 			if ($path) {
 				/** @noinspection PhpIncludeInspection */
-				include "$path/$class.php";
+				include "$path/$classFileName.php";
 			} else {
-				include "$class.php";
+				include "$classFileName.php";
 			}
 		}
 
-		if ($class) {
-			if (!class_exists($class)) {
-				$this->error("api class not found", ['api' => $apiName, 'file' => "$path/$class.php", 'class' => $class, 'method' => $method]);
+		if ($className) {
+			if (!class_exists($className)) {
+				$this->error("api class not found", ['api' => $apiName, 'file' => "$path/$classFileName.php", 'class' => $className, 'method' => $method]);
 				return $this->output(404, $this->failed(-404, 'api class not found'));
 			}
-			if (!method_exists($class, $method)) {
-				$this->error("api method not found", ['api' => $apiName, 'file' => "$path/$class.php", 'class' => $class, 'method' => $method]);
+			if (!method_exists($className, $method)) {
+				$this->error("api method not found", ['api' => $apiName, 'file' => "$path/$classFileName.php", 'class' => $className, 'method' => $method]);
 				return $this->output(404, $this->failed(-404, 'api method not found'));
 			}
-			$call_name = [$class, $method];
+			$call_name = [$className, $method];
 		} else {
 			if (!function_exists($method)) {
 				$this->error("api function not found", ['api' => $apiName]);
@@ -592,11 +593,8 @@ class Service
 
 	function decryptPassword($str)
 	{
-		$pwd = '';
-		if (function_exists('mcrypt_decrypt')) {
-			$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr($this->encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr($this->encrypt, 32));
-			$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
-		}
+		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr($this->encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr($this->encrypt, 32));
+		$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
 		if (!$pwd) $pwd = $str;
 		return $pwd;
 	}
