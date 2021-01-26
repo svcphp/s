@@ -28,7 +28,7 @@ class s
 
 	static function failed($code = -1, $message = '', $data = null)
 	{
-		return self::current()->failed($data, $code, $message);
+		return self::current()->failed($code, $message, $data);
 	}
 
 	static function __callStatic($name, $arguments)
