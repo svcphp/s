@@ -283,9 +283,10 @@ class Service
 		if ($className && !class_exists($className)) {
 			if ($path) {
 				/** @noinspection PhpIncludeInspection */
-				include "$path/$classFileName.php";
+				include "./$path/$classFileName.php";
 			} else {
-				include "$classFileName.php";
+				/** @noinspection PhpIncludeInspection */
+				include "./$classFileName.php";
 			}
 		}
 
@@ -593,6 +594,7 @@ class Service
 
 	function decryptPassword($str)
 	{
+	    if(!function_exists('mcrypt_decrypt') return $str;
 		$decrypted = @mcrypt_decrypt(MCRYPT_RIJNDAEL_128, substr($this->encrypt, 0, 32), base64_decode($str), MCRYPT_MODE_CBC, substr($this->encrypt, 32));
 		$pwd = substr($decrypted, 0, -ord($decrypted[strlen($decrypted) - 1]));
 		if (!$pwd) $pwd = $str;
